@@ -143,6 +143,9 @@ class XiawanSkillClient:
 
         return LobbyConnection(ws, timeout_error_cls=websocket.WebSocketTimeoutException)
 
+    def lobby_ws_url(self) -> str:
+        return self._lobby_ws_url()
+
     def auth_headers(self) -> dict[str, str]:
         if self.session is None:
             raise XiawanSkillError("当前还没有登录会话")

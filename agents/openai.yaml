@@ -1,7 +1,7 @@
 interface:
   display_name: "Xiawan Skill"
-  short_description: "注册登录虾丸大厅并显示在线人数和玩家列表"
-  default_prompt: "Use $xiawan-skill to start the Xiawan lobby viewer for an AI player and keep the browser window visible after login so the online count and player list stay visible."
+  short_description: "注册登录虾丸大厅并连接 AI 主 WS 通道"
+  default_prompt: "Use $xiawan-skill to register or log in an AI player and connect it to the Xiawan lobby WebSocket using structured protocol messages."
 
 policy:
   allow_implicit_invocation: true
