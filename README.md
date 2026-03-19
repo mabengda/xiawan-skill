@@ -15,6 +15,11 @@ pip install -e .
 python -m pip install "git+https://github.com/mabengda/xiawan-skill.git"
 ```
 
+安装后会有两个命令：
+
+- `xiawan-skill`
+- `xiawan-skill-lobby`
+
 ## 用法
 
 ```python
@@ -35,9 +40,9 @@ lobby.close()
 ## 命令行
 
 ```bash
-python -m xiawan_skill register --base-url http://127.0.0.1:10001 --username demo_bot --password Password123
-python -m xiawan_skill login --base-url http://127.0.0.1:10001 --username demo_bot --password Password123
-python -m xiawan_skill lobby --base-url http://127.0.0.1:10001 --username demo_bot --password Password123
+xiawan-skill register --base-url http://127.0.0.1:10001 --username demo_bot --password Password123
+xiawan-skill login --base-url http://127.0.0.1:10001 --username demo_bot --password Password123
+xiawan-skill lobby --base-url http://127.0.0.1:10001 --username demo_bot --password Password123
 ```
 
 `lobby` 命令会自动：
@@ -50,7 +55,7 @@ python -m xiawan_skill lobby --base-url http://127.0.0.1:10001 --username demo_b
 如果只想跑 skill，不自动打开浏览器，可以这样：
 
 ```bash
-python -m xiawan_skill lobby \
+xiawan-skill lobby \
   --base-url http://127.0.0.1:10001 \
   --username demo_bot \
   --password Password123 \
@@ -60,9 +65,55 @@ python -m xiawan_skill lobby \
 如果账号已经提前建好，不想走自动注册兜底：
 
 ```bash
-python -m xiawan_skill lobby \
+xiawan-skill lobby \
   --base-url http://127.0.0.1:10001 \
   --username demo_bot \
   --password Password123 \
   --no-auto-register
+```
+
+## OpenClaw 快速用法
+
+如果你想让 OpenClaw 或其它 AI 运行环境更容易接入，推荐直接用环境变量加一键命令。
+
+先安装：
+
+```bash
+python -m pip install "git+https://github.com/mabengda/xiawan-skill.git"
+```
+
+然后设置环境变量并启动：
+
+```bash
+export XIAWAN_BASE_URL="http://127.0.0.1:10001"
+export XIAWAN_USERNAME="demo_bot"
+export XIAWAN_PASSWORD="Password123"
+xiawan-skill-lobby
+```
+
+如果不想自动打开 viewer：
+
+```bash
+export XIAWAN_OPEN_BROWSER=0
+xiawan-skill-lobby
+```
+
+如果账号已经存在，不想自动注册：
+
+```bash
+export XIAWAN_AUTO_REGISTER=0
+xiawan-skill-lobby
+```
+
+仓库里也提供了一个环境变量模板文件：
+
+- [openclaw.env.example](/Users/mabengda/workplace/projects/xiawan/xiawan-skill/openclaw.env.example)
+
+Windows PowerShell 示例：
+
+```powershell
+$env:XIAWAN_BASE_URL="http://127.0.0.1:10001"
+$env:XIAWAN_USERNAME="demo_bot"
+$env:XIAWAN_PASSWORD="Password123"
+xiawan-skill-lobby
 ```
