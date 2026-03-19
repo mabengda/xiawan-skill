@@ -5,12 +5,77 @@ from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
+from pathlib import Path
 from queue import Empty, Queue
+import subprocess
+import sys
 import threading
+import traceback
 from typing import Any
 import webbrowser
 
 from xiawan_client import LobbySnapshot, XiawanSkillClient, XiawanSkillError
+
+
+def skill_root_dir() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def runtime_dir() -> Path:
+    configured = os.getenv("XIAWAN_RUNTIME_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    return skill_root_dir() / "runtime"
+
+
+def viewer_info_path() -> Path:
+    configured = os.getenv("XIAWAN_VIEWER_INFO_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return runtime_dir() / "viewer-session.json"
+
+
+def load_viewer_info() -> dict[str, Any] | None:
+    path = viewer_info_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def write_viewer_info(payload: dict[str, Any]) -> Path:
+    path = viewer_info_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def open_url_in_browser(url: str) -> bool:
+    try:
+        if webbrowser.open(url, new=2):
+            return True
+    except Exception:
+        pass
+
+    commands: list[list[str]] = []
+    if sys.platform == "darwin":
+        commands.append(["open", url])
+    elif os.name == "nt":
+        commands.append(["cmd", "/c", "start", "", url])
+    else:
+        commands.append(["xdg-open", url])
+
+    for command in commands:
+        try:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception:
+            continue
+    return False
 
 
 VIEWER_HTML = """<!doctype html>
@@ -18,22 +83,19 @@ VIEWER_HTML = """<!doctype html>
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>虾丸 Skill Viewer</title>
+    <title>虾丸大厅 Viewer</title>
     <style>
       :root {
-        --bg: #f4efe6;
-        --panel: rgba(255, 252, 247, 0.88);
-        --panel-strong: #fffaf2;
-        --ink: #1c2630;
-        --muted: #6c7a86;
-        --line: rgba(28, 38, 48, 0.08);
-        --accent: #0f8c7d;
-        --accent-soft: rgba(15, 140, 125, 0.12);
-        --warm: #d57a31;
-        --warm-soft: rgba(213, 122, 49, 0.14);
-        --danger: #c4514f;
-        --danger-soft: rgba(196, 81, 79, 0.14);
-        --shadow: 0 22px 60px rgba(35, 48, 61, 0.12);
+        --bg: #f5efe4;
+        --panel: rgba(255, 251, 245, 0.92);
+        --ink: #1c2730;
+        --muted: #677784;
+        --line: rgba(28, 39, 48, 0.08);
+        --accent: #117f70;
+        --accent-soft: rgba(17, 127, 112, 0.12);
+        --danger: #bf5347;
+        --danger-soft: rgba(191, 83, 71, 0.12);
+        --shadow: 0 18px 48px rgba(38, 50, 61, 0.12);
       }
 
       * { box-sizing: border-box; }
@@ -44,68 +106,67 @@ VIEWER_HTML = """<!doctype html>
         font-family: "Avenir Next", "SF Pro Rounded", "Segoe UI", sans-serif;
         color: var(--ink);
         background:
-          radial-gradient(circle at top left, rgba(15, 140, 125, 0.18), transparent 28%),
-          radial-gradient(circle at bottom right, rgba(213, 122, 49, 0.20), transparent 30%),
-          linear-gradient(160deg, #f7f1e8 0%, #efe7db 100%);
+          radial-gradient(circle at top left, rgba(17, 127, 112, 0.18), transparent 28%),
+          radial-gradient(circle at bottom right, rgba(212, 132, 55, 0.16), transparent 28%),
+          linear-gradient(160deg, #f7f1e8 0%, #eee5d8 100%);
       }
 
       .shell {
-        width: min(1180px, calc(100vw - 32px));
-        margin: 20px auto;
+        width: min(900px, calc(100vw - 32px));
+        margin: 24px auto;
         display: grid;
         gap: 18px;
       }
 
-      .hero {
-        background: linear-gradient(135deg, rgba(255, 250, 242, 0.96), rgba(252, 244, 233, 0.90));
-        border: 1px solid rgba(255, 255, 255, 0.65);
+      .panel {
+        background: var(--panel);
+        border: 1px solid rgba(255, 255, 255, 0.68);
         border-radius: 28px;
         box-shadow: var(--shadow);
-        overflow: hidden;
+        backdrop-filter: blur(12px);
       }
 
-      .hero-inner {
-        padding: 24px;
+      .hero {
+        padding: 28px;
         display: grid;
-        gap: 20px;
+        gap: 22px;
+      }
+
+      .eyebrow {
+        font-size: 12px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+
+      h1 {
+        margin: 10px 0 0;
+        font-size: clamp(34px, 5vw, 56px);
+        line-height: 1;
+      }
+
+      .subtitle {
+        color: var(--muted);
+        margin-top: 10px;
+        font-size: 15px;
       }
 
       .hero-top {
         display: flex;
         justify-content: space-between;
+        gap: 18px;
         align-items: start;
-        gap: 16px;
-      }
-
-      .eyebrow {
-        font-size: 12px;
-        letter-spacing: 0.16em;
-        text-transform: uppercase;
-        color: var(--muted);
-        margin-bottom: 10px;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: clamp(30px, 4vw, 46px);
-        line-height: 1.02;
-      }
-
-      .subtitle {
-        margin-top: 10px;
-        color: var(--muted);
-        font-size: 15px;
       }
 
       .status-badge {
         display: inline-flex;
         align-items: center;
-        gap: 8px;
         padding: 10px 14px;
         border-radius: 999px;
         background: var(--accent-soft);
         color: var(--accent);
-        font-weight: 700;
+        font-weight: 800;
+        white-space: nowrap;
       }
 
       .status-badge.error {
@@ -113,152 +174,73 @@ VIEWER_HTML = """<!doctype html>
         color: var(--danger);
       }
 
-      .status-badge.warn {
-        background: var(--warm-soft);
-        color: var(--warm);
+      .count-card {
+        padding: 28px;
+        border-radius: 24px;
+        background: linear-gradient(135deg, rgba(17, 127, 112, 0.12), rgba(255, 255, 255, 0.68));
+        border: 1px solid rgba(17, 127, 112, 0.10);
       }
 
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-      }
-
-      .metric {
-        background: rgba(255, 255, 255, 0.72);
-        border: 1px solid rgba(255, 255, 255, 0.6);
-        border-radius: 20px;
-        padding: 16px 18px;
-      }
-
-      .metric-label {
-        font-size: 12px;
-        letter-spacing: 0.08em;
+      .count-label {
+        font-size: 13px;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
         color: var(--muted);
       }
 
-      .metric-value {
+      .count-value {
         margin-top: 10px;
-        font-size: 28px;
-        font-weight: 800;
+        font-size: clamp(52px, 10vw, 96px);
+        font-weight: 900;
+        line-height: 0.95;
       }
 
-      .grid {
-        display: grid;
-        grid-template-columns: 1.15fr 0.85fr;
-        gap: 18px;
+      .count-hint {
+        margin-top: 14px;
+        color: var(--muted);
+        font-size: 14px;
       }
 
-      .panel {
-        background: var(--panel);
-        border: 1px solid rgba(255, 255, 255, 0.62);
-        border-radius: 24px;
-        box-shadow: var(--shadow);
-        overflow: hidden;
-        backdrop-filter: blur(12px);
+      .players-panel {
+        padding: 22px;
       }
 
       .panel-head {
         display: flex;
         justify-content: space-between;
-        align-items: center;
+        align-items: baseline;
         gap: 12px;
-        padding: 18px 20px 0;
       }
 
       .panel-title {
-        font-size: 18px;
-        font-weight: 800;
+        font-size: 24px;
+        font-weight: 900;
       }
 
       .panel-subtitle {
-        font-size: 13px;
         color: var(--muted);
-      }
-
-      .controls {
-        display: flex;
-        gap: 10px;
-      }
-
-      button {
-        border: 0;
-        border-radius: 999px;
-        padding: 10px 14px;
-        font: inherit;
-        font-weight: 700;
-        cursor: pointer;
-        color: white;
-        background: linear-gradient(135deg, #0f8c7d, #10695f);
-        box-shadow: 0 12px 26px rgba(15, 140, 125, 0.22);
-      }
-
-      button.secondary {
-        background: linear-gradient(135deg, #d57a31, #b45b1a);
-        box-shadow: 0 12px 26px rgba(213, 122, 49, 0.22);
-      }
-
-      .timeline {
-        padding: 18px 20px 22px;
-        display: grid;
-        gap: 12px;
-        max-height: 62vh;
-        overflow: auto;
-      }
-
-      .bubble {
-        display: grid;
-        gap: 6px;
-        padding: 14px 16px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.92);
-        border: 1px solid var(--line);
-        animation: rise 180ms ease-out;
-      }
-
-      .bubble.command { border-left: 4px solid var(--warm); }
-      .bubble.success { border-left: 4px solid var(--accent); }
-      .bubble.error { border-left: 4px solid var(--danger); }
-      .bubble.info,
-      .bubble.event { border-left: 4px solid #7e8b98; }
-
-      .bubble-top {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: center;
-      }
-
-      .bubble-title {
-        font-weight: 800;
-      }
-
-      .bubble-time {
-        color: var(--muted);
-        font-size: 12px;
-        white-space: nowrap;
-      }
-
-      .bubble-detail {
-        color: #40505d;
-        line-height: 1.5;
-        word-break: break-word;
+        font-size: 14px;
       }
 
       .players {
-        padding: 18px 20px 22px;
         display: grid;
         gap: 12px;
+        margin-top: 18px;
       }
 
       .player-card {
-        background: rgba(255, 255, 255, 0.90);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 14px;
+        padding: 16px 18px;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.80);
         border: 1px solid var(--line);
-        border-radius: 18px;
-        padding: 14px 16px;
-        display: grid;
-        gap: 8px;
+      }
+
+      .player-main {
+        min-width: 0;
       }
 
       .player-name {
@@ -266,211 +248,153 @@ VIEWER_HTML = """<!doctype html>
         font-weight: 800;
       }
 
-      .player-meta {
+      .player-id {
+        margin-top: 4px;
         color: var(--muted);
+        font-size: 14px;
+      }
+
+      .player-status {
+        padding: 8px 12px;
+        border-radius: 999px;
+        background: var(--accent-soft);
+        color: var(--accent);
         font-size: 13px;
+        font-weight: 800;
+        white-space: nowrap;
       }
 
       .empty {
-        padding: 18px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.78);
-        border: 1px dashed rgba(28, 38, 48, 0.16);
+        padding: 22px;
+        border-radius: 20px;
+        border: 1px dashed rgba(28, 39, 48, 0.14);
         color: var(--muted);
+        background: rgba(255, 255, 255, 0.58);
       }
 
-      @keyframes rise {
-        from {
-          opacity: 0;
-          transform: translateY(6px);
+      @media (max-width: 640px) {
+        .shell {
+          width: min(100vw - 16px, 100%);
+          margin: 12px auto;
         }
-        to {
-          opacity: 1;
-          transform: translateY(0);
-        }
-      }
 
-      @media (max-width: 920px) {
-        .metrics,
-        .grid {
-          grid-template-columns: 1fr;
+        .hero,
+        .players-panel {
+          padding: 18px;
         }
 
         .hero-top,
-        .panel-head {
+        .panel-head,
+        .player-card {
           flex-direction: column;
-          align-items: start;
-        }
-
-        .controls {
-          width: 100%;
-          flex-wrap: wrap;
-        }
-
-        button {
-          flex: 1 1 180px;
+          align-items: flex-start;
         }
       }
     </style>
   </head>
   <body>
-    <div class="shell">
-      <section class="hero">
-        <div class="hero-inner">
-          <div class="hero-top">
-            <div>
-              <div class="eyebrow">Xiawan Skill Viewer</div>
-              <h1 id="hero-title">Skill 正在启动</h1>
-              <div class="subtitle" id="hero-subtitle">等待运行状态...</div>
-            </div>
-            <div id="status-badge" class="status-badge">准备中</div>
+    <main class="shell">
+      <section class="panel hero">
+        <div class="hero-top">
+          <div>
+            <div class="eyebrow">Xiawan Lobby Viewer</div>
+            <h1 id="title">虾丸大厅</h1>
+            <div class="subtitle" id="subtitle">准备连接中...</div>
           </div>
-          <div class="metrics">
-            <div class="metric">
-              <div class="metric-label">在线人数</div>
-              <div class="metric-value" id="online-count">0</div>
-            </div>
-            <div class="metric">
-              <div class="metric-label">玩家卡片</div>
-              <div class="metric-value" id="player-count">0</div>
-            </div>
-            <div class="metric">
-              <div class="metric-label">事件气泡</div>
-              <div class="metric-value" id="event-count">0</div>
-            </div>
-            <div class="metric">
-              <div class="metric-label">最近快照</div>
-              <div class="metric-value" id="snapshot-time" style="font-size:20px;">-</div>
-            </div>
-          </div>
+          <div class="status-badge" id="status-badge">准备中</div>
+        </div>
+
+        <div class="count-card">
+          <div class="count-label">在线玩家数量</div>
+          <div class="count-value" id="online-count">0</div>
+          <div class="count-hint" id="count-hint">正在等待大厅快照...</div>
         </div>
       </section>
 
-      <section class="grid">
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="panel-title">执行时间线</div>
-              <div class="panel-subtitle">每个命令和服务端回包都会在这里留下气泡</div>
-            </div>
-            <div class="controls">
-              <button type="button" onclick="sendCommand('REQUEST_SNAPSHOT')">刷新快照</button>
-              <button type="button" class="secondary" onclick="sendCommand('PING')">发送 Ping</button>
-            </div>
-          </div>
-          <div class="timeline" id="timeline"></div>
-        </article>
-
-        <article class="panel">
-          <div class="panel-head">
-            <div>
-              <div class="panel-title">大厅玩家</div>
-              <div class="panel-subtitle" id="players-subtitle">等待大厅连接...</div>
-            </div>
-          </div>
-          <div class="players" id="players"></div>
-        </article>
+      <section class="panel players-panel">
+        <div class="panel-head">
+          <div class="panel-title">玩家列表</div>
+          <div class="panel-subtitle" id="players-subtitle">大厅尚未连接</div>
+        </div>
+        <div class="players" id="player-list"></div>
       </section>
-    </div>
+    </main>
 
     <script>
-      let lastEventCount = -1;
-
-      function formatTime(value) {
-        if (!value) {
-          return '-';
-        }
-        const date = new Date(value);
-        if (Number.isNaN(date.getTime())) {
-          return value;
-        }
-        return date.toLocaleTimeString('zh-CN', { hour12: false });
-      }
+      const stateUrl = '/api/state';
 
       function escapeHtml(value) {
-        return String(value)
+        return String(value ?? '')
           .replaceAll('&', '&amp;')
           .replaceAll('<', '&lt;')
           .replaceAll('>', '&gt;')
           .replaceAll('"', '&quot;')
-          .replaceAll("'", '&#039;');
+          .replaceAll("'", '&#39;');
       }
 
-      function renderStatus(agent) {
-        const badge = document.getElementById('status-badge');
-        badge.textContent = agent.statusLabel;
-        badge.className = 'status-badge';
-        if (agent.status === 'error') {
-          badge.classList.add('error');
-        } else if (agent.status === 'starting' || agent.status === 'registering' || agent.status === 'logging-in') {
-          badge.classList.add('warn');
+      function formatCount(value) {
+        if (value === undefined || value === null) {
+          return '0';
         }
+        return String(value);
       }
 
       function renderPlayers(players) {
-        const container = document.getElementById('players');
-        if (!players.length) {
-          container.innerHTML = '<div class="empty">大厅里暂时还没有在线玩家。</div>';
+        const playerList = document.getElementById('player-list');
+        if (!Array.isArray(players) || players.length === 0) {
+          playerList.innerHTML = '<div class="empty">当前没有在线玩家。</div>';
           return;
         }
-        container.innerHTML = players.map((player) => `
-          <div class="player-card">
-            <div class="player-name">${escapeHtml(player.displayName || player.username)}</div>
-            <div class="player-meta">账号：${escapeHtml(player.username)}</div>
-            <div class="player-meta">连接时间：${escapeHtml(formatTime(player.connectedAt))}</div>
-            <div class="player-meta">最近活跃：${escapeHtml(formatTime(player.lastSeenAt))}</div>
-          </div>
-        `).join('');
+
+        playerList.innerHTML = players
+          .map((player) => `
+            <article class="player-card">
+              <div class="player-main">
+                <div class="player-name">${escapeHtml(player.displayName || player.username || '匿名玩家')}</div>
+                <div class="player-id">@${escapeHtml(player.username || '-')}</div>
+              </div>
+              <div class="player-status">${escapeHtml(player.status || 'ONLINE')}</div>
+            </article>
+          `)
+          .join('');
       }
 
-      function renderEvents(events) {
-        if (events.length === lastEventCount) {
+      function renderState(state) {
+        if (!state || !state.agent || !state.lobby) {
           return;
         }
-        lastEventCount = events.length;
-        const container = document.getElementById('timeline');
-        if (!events.length) {
-          container.innerHTML = '<div class="empty">Skill 已启动，等待第一条事件...</div>';
-          return;
-        }
-        container.innerHTML = events.slice().reverse().map((event) => `
-          <div class="bubble ${escapeHtml(event.kind)}">
-            <div class="bubble-top">
-              <div class="bubble-title">${escapeHtml(event.title)}</div>
-              <div class="bubble-time">${escapeHtml(formatTime(event.timestamp))}</div>
-            </div>
-            <div class="bubble-detail">${escapeHtml(event.detail)}</div>
-          </div>
-        `).join('');
-      }
 
-      async function sendCommand(command) {
-        await fetch('/api/command', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ command }),
-        });
-      }
-
-      async function refresh() {
-        const response = await fetch('/api/state', { cache: 'no-store' });
-        const state = await response.json();
-        document.getElementById('hero-title').textContent = state.agent.username;
-        document.getElementById('hero-subtitle').textContent = state.agent.subtitle;
-        document.getElementById('online-count').textContent = state.lobby.onlineCount;
-        document.getElementById('player-count').textContent = state.lobby.players.length;
-        document.getElementById('event-count').textContent = state.events.length;
-        document.getElementById('snapshot-time').textContent = formatTime(state.lobby.lastSnapshotAt);
+        document.getElementById('title').textContent = state.agent.username
+          ? `${state.agent.username} 的虾丸大厅`
+          : '虾丸大厅';
+        document.getElementById('subtitle').textContent = state.agent.subtitle || '';
+        document.getElementById('status-badge').textContent = state.agent.statusLabel || '准备中';
+        document.getElementById('status-badge').className = `status-badge ${state.agent.status === 'error' ? 'error' : ''}`;
+        document.getElementById('online-count').textContent = formatCount(state.lobby.onlineCount);
+        document.getElementById('count-hint').textContent = state.lobby.connected
+          ? `当前大厅里有 ${formatCount(state.lobby.onlineCount)} 位在线玩家`
+          : '大厅连接尚未建立';
         document.getElementById('players-subtitle').textContent = state.lobby.connected
-          ? `当前连接正常，最新快照时间 ${formatTime(state.lobby.lastSnapshotAt)}`
-          : '大厅尚未建立连接';
-        renderStatus(state.agent);
-        renderPlayers(state.lobby.players);
-        renderEvents(state.events);
+          ? '实时展示当前在线玩家'
+          : '大厅尚未连接';
+
+        renderPlayers(state.lobby.players || []);
       }
 
-      refresh();
-      setInterval(refresh, 800);
+      async function refreshState() {
+        const response = await fetch(stateUrl, { cache: 'no-store' });
+        const state = await response.json();
+        renderState(state);
+      }
+
+      async function boot() {
+        await refreshState();
+        setInterval(refreshState, 1500);
+      }
+
+      boot().catch((error) => {
+        console.error(error);
+      });
     </script>
   </body>
 </html>
@@ -575,13 +499,14 @@ class SkillViewerServer:
         host, port = self._server.server_address
         return f"http://{host}:{port}"
 
-    def start(self) -> str:
+    def start(self) -> tuple[str, bool]:
         self._thread.start()
         url = self.viewer_url
         self._state.set_viewer_url(url)
+        browser_opened = False
         if self._open_browser:
-            webbrowser.open(url)
-        return url
+            browser_opened = open_url_in_browser(url)
+        return url, browser_opened
 
     def stop(self) -> None:
         self._server.shutdown()
@@ -665,8 +590,22 @@ def run_lobby_viewer(
 ) -> int:
     state = SkillViewerState(base_url, username)
     server = SkillViewerServer(state, open_browser=open_browser)
-    viewer_url = server.start()
-    print(json.dumps({"viewerUrl": viewer_url, "username": username}, ensure_ascii=False, indent=2))
+    viewer_url, browser_opened = server.start()
+    viewer_payload: dict[str, Any] = {
+        "viewerUrl": viewer_url,
+        "viewerInfoPath": str(viewer_info_path()),
+        "username": username,
+        "baseUrl": base_url,
+        "pid": os.getpid(),
+        "browserOpenRequested": open_browser,
+        "browserOpened": browser_opened,
+        "startedAt": _utc_now_iso(),
+        "connected": False,
+    }
+    write_viewer_info(viewer_payload)
+    print(json.dumps(viewer_payload, ensure_ascii=False, indent=2))
+    print(f"VIEWER_URL={viewer_url}", flush=True)
+    print(f"VIEWER_INFO_PATH={viewer_payload['viewerInfoPath']}", flush=True)
 
     client = XiawanSkillClient(base_url)
     lobby = None
@@ -696,8 +635,11 @@ def run_lobby_viewer(
         state.push_event("command", "连接大厅", "准备订阅大厅在线状态和玩家列表")
         lobby = client.connect_lobby()
         state.set_lobby_connected(True)
+        viewer_payload["connected"] = True
+        viewer_payload["connectedAt"] = _utc_now_iso()
+        write_viewer_info(viewer_payload)
         state.set_status("connected", "大厅在线", "WebSocket 已连接，等待大厅快照")
-        state.push_event("success", "大厅已连接", "后续每次快照更新都会显示成事件气泡")
+        state.push_event("success", "大厅已连接", "后续会自动更新在线人数和玩家列表")
 
         while True:
             pending_command = state.next_command(timeout=0.1)
@@ -736,10 +678,27 @@ def run_lobby_viewer(
         state.push_event("info", "Skill 已停止", "可以关闭 viewer 页面了")
         return 0
     except XiawanSkillError as exc:
-        state.set_status("error", "发生错误", str(exc))
-        state.push_event("error", "Skill 发生错误", str(exc))
+        message = str(exc)
+        state.set_status("error", "发生错误", message)
+        state.push_event("error", "Skill 发生错误", message)
+        viewer_payload["error"] = message
+        viewer_payload["errorAt"] = _utc_now_iso()
+        write_viewer_info(viewer_payload)
+        print(json.dumps({"error": message, "viewerInfoPath": viewer_payload["viewerInfoPath"]}, ensure_ascii=False), flush=True)
+        return 1
+    except Exception as exc:
+        message = f"未处理异常: {exc}"
+        state.set_status("error", "发生错误", message)
+        state.push_event("error", "Skill 发生错误", message)
+        viewer_payload["error"] = message
+        viewer_payload["errorAt"] = _utc_now_iso()
+        write_viewer_info(viewer_payload)
+        traceback.print_exc()
         return 1
     finally:
+        viewer_payload["connected"] = False
+        viewer_payload["stoppedAt"] = _utc_now_iso()
+        write_viewer_info(viewer_payload)
         if lobby is not None:
             state.set_lobby_connected(False)
             try:
