@@ -5,6 +5,7 @@ import json
 import os
 import sys
 
+from xiawan_account_store import load_account_record, save_account_record
 from xiawan_client import XiawanSkillClient, XiawanSkillError
 
 
@@ -55,20 +56,40 @@ def _ensure_lobby_dependency() -> None:
 def _login_or_register(
         client: XiawanSkillClient,
         *,
+        base_url: str,
         username: str,
         password: str,
         auto_register: bool,
-) -> tuple[object, bool]:
+) -> tuple[object, bool, str]:
     try:
         session = client.login(username, password)
-        return session, False
+        account_path = save_account_record(
+            base_url=base_url,
+            username=username,
+            agent=session.agent,
+            registered=False,
+        )
+        return session, False, str(account_path)
     except XiawanSkillError as exc:
         if exc.error_code != "ACCOUNT_NOT_FOUND" or not auto_register:
             raise
 
+    existing_record = load_account_record(base_url, username)
+    if existing_record is not None:
+        raise XiawanSkillError(
+            "本地记录显示该 AI 账号已经注册过，当前不会自动重复注册。请直接登录，或确认服务地址是否正确。",
+            error_code="LOCAL_ACCOUNT_EXISTS",
+        )
+
     client.register(username=username, password=password)
     session = client.login(username, password)
-    return session, True
+    account_path = save_account_record(
+        base_url=base_url,
+        username=username,
+        agent=session.agent,
+        registered=True,
+    )
+    return session, True, str(account_path)
 
 
 def _run_lobby(args: argparse.Namespace) -> int:
@@ -82,8 +103,9 @@ def _run_lobby(args: argparse.Namespace) -> int:
     lobby = None
 
     try:
-        session, created = _login_or_register(
+        session, created, account_path = _login_or_register(
             client,
+            base_url=args.base_url,
             username=args.username,
             password=args.password,
             auto_register=not args.no_auto_register,
@@ -94,6 +116,7 @@ def _run_lobby(args: argparse.Namespace) -> int:
                 "username": session.agent["username"],
                 "created": created,
                 "expiresInSeconds": session.expires_in_seconds,
+                "accountFile": account_path,
             }
         )
 
@@ -103,6 +126,7 @@ def _run_lobby(args: argparse.Namespace) -> int:
                 "type": "LOBBY_CONNECTED",
                 "username": session.agent["username"],
                 "wsUrl": client.lobby_ws_url(),
+                "accountFile": account_path,
             }
         )
 
@@ -175,6 +199,13 @@ def main() -> None:
 
     if args.command == "register":
         result = client.register(username=args.username, password=args.password)
+        account_path = save_account_record(
+            base_url=args.base_url,
+            username=args.username,
+            agent=result,
+            registered=True,
+        )
+        result["accountFile"] = str(account_path)
         _print_json(result)
         return
 
@@ -192,12 +223,19 @@ def main() -> None:
             )
             raise SystemExit(1)
 
+        account_path = save_account_record(
+            base_url=args.base_url,
+            username=args.username,
+            agent=session.agent,
+            registered=False,
+        )
         _print_json(
             {
                 "accessToken": session.access_token,
                 "refreshToken": session.refresh_token,
                 "expiresInSeconds": session.expires_in_seconds,
                 "agent": session.agent,
+                "accountFile": str(account_path),
             }
         )
         return
