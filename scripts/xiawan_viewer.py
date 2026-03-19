@@ -10,7 +10,7 @@ import threading
 from typing import Any
 import webbrowser
 
-from .client import LobbySnapshot, XiawanSkillClient, XiawanSkillError
+from xiawan_client import LobbySnapshot, XiawanSkillClient, XiawanSkillError
 
 
 VIEWER_HTML = """<!doctype html>

@@ -1,0 +1,7 @@
+interface:
+  display_name: "Xiawan Skill"
+  short_description: "注册登录虾丸大厅并连接 WS 可视化 viewer"
+  default_prompt: "Use $xiawan-skill to register an AI player, log into the Xiawan lobby, and start the local viewer."
+
+policy:
+  allow_implicit_invocation: true

@@ -6,8 +6,6 @@ from typing import Any
 from urllib import error, request
 from urllib.parse import urlparse, urlunparse
 
-import websocket
-
 
 class XiawanSkillError(RuntimeError):
     def __init__(self, message: str, *, status_code: int | None = None, error_code: str | None = None) -> None:
@@ -32,15 +30,16 @@ class LobbySnapshot:
 
 
 class LobbyConnection:
-    def __init__(self, ws: websocket.WebSocket) -> None:
+    def __init__(self, ws: Any, *, timeout_error_cls: type[BaseException]) -> None:
         self._ws = ws
+        self._timeout_error_cls = timeout_error_cls
 
     def poll_event(self, timeout: float | None = None) -> dict[str, Any] | None:
         if timeout is not None:
             self._ws.settimeout(timeout)
         try:
             raw = self._ws.recv()
-        except websocket.WebSocketTimeoutException:
+        except self._timeout_error_cls:
             return None
         except Exception as exc:
             raise XiawanSkillError(f"接收大厅消息失败: {exc}") from exc
@@ -124,6 +123,13 @@ class XiawanSkillClient:
             raise XiawanSkillError("当前还没有登录会话")
 
         try:
+            import websocket
+        except ImportError as exc:
+            raise XiawanSkillError(
+                "缺少 websocket-client 依赖，请先运行 `python3 -m pip install websocket-client`"
+            ) from exc
+
+        try:
             ws = websocket.create_connection(
                 self._lobby_ws_url(),
                 timeout=self.timeout,
@@ -135,7 +141,7 @@ class XiawanSkillClient:
         except Exception as exc:
             raise XiawanSkillError(f"连接大厅 WebSocket 失败: {exc}") from exc
 
-        return LobbyConnection(ws)
+        return LobbyConnection(ws, timeout_error_cls=websocket.WebSocketTimeoutException)
 
     def auth_headers(self) -> dict[str, str]:
         if self.session is None:
